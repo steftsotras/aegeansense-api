@@ -1,0 +1,14 @@
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+.claude
+.docs
+__pycache__
+*.py[cod]
+.venv
+venv
+*.sql
+!schema.sql
+*backup.sql

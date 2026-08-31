@@ -1,0 +1,64 @@
+# ============================================================
+# AegeanSense - Local Development Stack
+# ============================================================
+
+services:
+  # ==================== PostgreSQL Database ====================
+  db:
+    image: postgres:16-alpine
+    container_name: aegeansense-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: aegeansense
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-aegeansense_local_dev}
+      POSTGRES_DB: aegeansense
+    volumes:
+      # Persist data
+      - postgres_data:/var/lib/postgresql/data
+      # Run schema.sql on first start
+      - ./schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aegeansense -d aegeansense"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ==================== FastAPI Backend ====================
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aegeansense-api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Database connection
+      DATABASE_URL: postgresql://aegeansense:${DB_PASSWORD:-aegeansense_local_dev}@db:5432/aegeansense
+
+      # Batch sync settings (per FinotProfile, applied when a sync is triggered)
+      SYNC_BATCH_DAYS: ${SYNC_BATCH_DAYS:-7}
+      SYNC_START_DATE: ${SYNC_START_DATE:-2024-01-01}
+
+      # Admin bootstrap - seeds the first admin_users row on first startup
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+
+      # Admin JWT auth
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-720}
+
+      # Encrypts FinotProfile passwords at rest
+      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY}
+    ports:
+      - "8000:8000"
+    # For development: mount code for hot reload
+    # volumes:
+    #   - ./app:/app/app
+
+volumes:
+  postgres_data:
+    name: aegeansense-postgres-data

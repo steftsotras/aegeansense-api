@@ -1,0 +1,25 @@
+.claude/
+
+# Environment / secrets
+.env
+
+# Database dump (local replica, regenerated from FINoT — not for distribution)
+samos_backup.sql
+aegeansense_backup.sql
+
+# Internal design notes (used for thesis writing, not part of the deliverable)
+.docs/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
