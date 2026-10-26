@@ -1,5 +1,5 @@
 # FastAPI and server
-fastapi==0.109.2
+fastapi==0.141.1
 uvicorn[standard]==0.27.1
 
 # Database
@@ -7,16 +7,16 @@ sqlalchemy==2.0.25
 psycopg2-binary==2.9.9
 
 # Settings management
-pydantic==2.6.1
+pydantic==2.13.5
 pydantic-settings==2.1.0
 
 # HTTP client for FINoT API
 httpx==0.26.0
 
 # Environment variables
-python-dotenv==1.0.1
+python-dotenv==1.2.3
 
 # Admin auth and credential encryption
 bcrypt==4.1.2
-pyjwt==2.8.0
-cryptography==42.0.5
+pyjwt==2.15.0
+cryptography==50.0.1

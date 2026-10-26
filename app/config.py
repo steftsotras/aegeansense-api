@@ -2,6 +2,7 @@
 Application configuration - loads from environment variables.
 """
 from pydantic_settings import BaseSettings
+from pydantic import field_validator
 from functools import lru_cache
 
 
@@ -12,13 +13,17 @@ class Settings(BaseSettings):
     # Batch sync settings (to avoid the API's 10k-record-per-request limit)
     sync_batch_days: int = 7            # Fetch data in 7-day chunks
     sync_start_date: str = "2024-01-01" # Default start date for historical sync
+    sync_overlap_hours: int = 6         # Re-fetch this window on resume to catch late-arriving readings
+
+    # Automatic sync of all active profiles; 0 disables the in-process scheduler
+    sync_interval_hours: float = 6
 
     # Admin bootstrap - creates the first admin_users row on startup if none exists
     admin_email: str = ""
     admin_password: str = ""
 
     # Admin JWT auth
-    jwt_secret: str = "change-me-in-production"
+    jwt_secret: str
     jwt_expire_minutes: int = 720  # 12 hours
 
     # Fernet key used to encrypt FinotProfile passwords at rest
@@ -27,6 +32,13 @@ class Settings(BaseSettings):
     # Comma-separated browser origins allowed to call the API. In production,
     # set this to the public Railway domain of aegeansense-web.
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+
+    @field_validator("jwt_secret")
+    @classmethod
+    def validate_jwt_secret(cls, value: str) -> str:
+        if len(value) < 32 or value == "change-me-in-production":
+            raise ValueError("JWT_SECRET must be a generated secret of at least 32 characters")
+        return value
 
     @property
     def allowed_cors_origins(self) -> list[str]:

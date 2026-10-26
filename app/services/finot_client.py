@@ -35,20 +35,20 @@ class FinotClient:
         self.password = password
         self._token: Optional[str] = None
         self._token_expires: Optional[datetime] = None
-    
+
     def is_configured(self) -> bool:
         """Check if FINoT client is properly configured with all required credentials."""
         return bool(self.base_url and self.username and self.password)
-    
+
     async def _get_token(self) -> str:
         """Get or refresh JWT token."""
         # Check if we have a valid cached token
         if self._token and self._token_expires:
             if datetime.now(timezone.utc) < self._token_expires:
                 return self._token
-        
+
         logger.info("Fetching new FINoT token...")
-        
+
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.post(
@@ -63,43 +63,43 @@ class FinotClient:
                     },
                     timeout=30.0
                 )
-                
+
                 if response.status_code != 200:
                     logger.error(f"Auth failed with status: {response.status_code}")
                     logger.error(f"Response: {response.text}")
                     raise FinotAuthError(f"Authentication failed: {response.status_code}")
-                
+
                 data = response.json()
 
                 # Response format: {"status": 200, "result": {"token": "...", "tenantName": "...", "user": {...}}}
                 if data.get("status") != 200:
                     logger.error(f"Auth response status not 200: {data}")
                     raise FinotAuthError(f"Authentication failed: status {data.get('status')}")
-                
+
                 result = data.get("result", {})
                 token = result.get("token")
-                
+
                 if not token:
                     logger.error(f"No token in auth response: {data}")
                     raise FinotAuthError("Could not extract token from response")
-                
+
                 self._token = token
                 # Cache for 23 hours (tokens usually valid 24h)
                 self._token_expires = datetime.now(timezone.utc) + timedelta(hours=23)
-                
+
                 tenant = result.get("tenantName", "unknown")
                 user_email = result.get("user", {}).get("email", "unknown")
                 logger.info(f"Successfully obtained FINoT token for {user_email} @ {tenant}")
-                
+
                 return self._token
-                
+
             except httpx.HTTPStatusError as e:
                 logger.error(f"Auth HTTP error: {e.response.status_code}")
                 raise FinotAuthError(f"Authentication failed: {e.response.status_code}")
             except Exception as e:
                 logger.error(f"Auth error: {e}")
                 raise FinotAuthError(str(e))
-    
+
     def _clear_token(self):
         """Clear cached token (for retry on 401)."""
         self._token = None
@@ -108,12 +108,12 @@ class FinotClient:
     async def fetch_stations(self) -> list[dict]:
         """
         Fetch all stations from FINoT inventory.
-        
+
         Returns:
             List of station objects from FINoT
         """
         token = await self._get_token()
-        
+
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 f"{self.base_url}/inventory/v1/objects",
@@ -123,13 +123,13 @@ class FinotClient:
                 },
                 timeout=30.0
             )
-            
+
             # Handle 401 with retry
             if response.status_code == 401:
                 logger.warning("Token expired, refreshing...")
                 self._clear_token()
                 token = await self._get_token()
-                
+
                 response = await client.get(
                     f"{self.base_url}/inventory/v1/objects",
                     headers={
@@ -138,14 +138,14 @@ class FinotClient:
                     },
                     timeout=30.0
                 )
-            
+
             response.raise_for_status()
             data = response.json()
-            
+
             objects = data.get("result", {}).get("objects", [])
             logger.info(f"Fetched {len(objects)} stations from FINoT")
             return objects
-    
+
     async def fetch_historical_data(
         self,
         entity_id: str,
@@ -158,9 +158,9 @@ class FinotClient:
     ) -> dict:
         """
         Fetch historical data for an entity with optional parameters.
-        
+
         IMPORTANT: Always specify from_date and to_date to avoid hitting the 10k record limit!
-        
+
         Args:
             entity_id: The FINoT entity ID
             from_date: Start date (inclusive) - REQUIRED to avoid 10k limit
@@ -169,12 +169,12 @@ class FinotClient:
             aggr_method: Aggregation method (count, sum, avg, min, max)
             aggr_period: Aggregation period (year, month, day, hour, minute, second)
             last_n: Maximum number of results
-            
+
         Returns:
             Dict with 'index' (timestamps) and 'attributes' (data arrays)
         """
         token = await self._get_token()
-        
+
         # Build query parameters
         params = {}
         if from_date:
@@ -189,9 +189,9 @@ class FinotClient:
             params["aggrPeriod"] = aggr_period
         if last_n:
             params["lastN"] = str(last_n)
-        
+
         logger.info(f"Fetching historical data for {entity_id} with params: {params}")
-        
+
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 f"{self.base_url}/inventory/v1/objects/{entity_id}/data",
@@ -202,13 +202,13 @@ class FinotClient:
                 params=params if params else None,
                 timeout=60.0
             )
-            
+
             # Handle 401 with retry
             if response.status_code == 401:
                 logger.warning("Token expired during data fetch, refreshing...")
                 self._clear_token()
                 token = await self._get_token()
-                
+
                 response = await client.get(
                     f"{self.base_url}/inventory/v1/objects/{entity_id}/data",
                     headers={
@@ -218,27 +218,27 @@ class FinotClient:
                     params=params if params else None,
                     timeout=60.0
                 )
-            
+
             response.raise_for_status()
             data = response.json()
-            
+
             result = data.get("result", {})
-            
+
             # Log what we got
             index_count = len(result.get("index", []))
             attr_count = len(result.get("attributes", []))
             logger.info(f"Received {index_count} timestamps, {attr_count} attributes for {entity_id}")
-            
+
             return result
 
     async def test_connection(self) -> dict:
         """Test the connection and return status info."""
         try:
             login_result = await self._get_token()
-            
+
             # Try to list entities
             stations = await self.fetch_stations()
-            
+
             return {
                 "success": True,
                 "authenticated": True,

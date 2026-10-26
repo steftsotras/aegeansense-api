@@ -11,6 +11,7 @@ from sqlalchemy import desc
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 import asyncio
+import logging
 
 from ..database import get_db
 from ..dependencies import get_current_admin
@@ -22,10 +23,40 @@ from ..services.sync_service import (
 )
 from ..services.finot_client import client_from_profile
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/sync", tags=["sync"])
 
 # Keeps a reference to the running background sync task so it isn't garbage-collected.
 _sync_task = None
+
+
+def sync_in_progress(db: Session) -> bool:
+    """True if a background sync task is alive or a run is recorded as running."""
+    if _sync_task is not None and not _sync_task.done():
+        return True
+    return db.query(SyncRun).filter(SyncRun.status == "running").count() > 0
+
+
+def start_background_sync(profile_ids: list[int], force_full: bool = False) -> None:
+    """Run full_sync for each profile, one after another, in a background task."""
+    global _sync_task
+
+    async def run_sync():
+        from ..database import SessionLocal
+        for profile_id in profile_ids:
+            session = SessionLocal()
+            try:
+                profile = session.get(FinotProfile, profile_id)
+                if profile and profile.is_active:
+                    await full_sync(session, profile, force_full=force_full)
+            except Exception as e:
+                # full_sync has already recorded the failure on its SyncRun/SyncLog.
+                logger.error(f"Background sync failed for profile {profile_id}: {e}")
+            finally:
+                session.close()
+
+    _sync_task = asyncio.create_task(run_sync())
 
 
 def _get_active_profile(db: Session, profile_id: int) -> FinotProfile:
@@ -69,29 +100,16 @@ async def start_sync_background(
 
     Use force_full=true to re-sync all data from the start date.
     """
-    global _sync_task
+    _get_active_profile(db, profile_id)
 
-    profile = _get_active_profile(db, profile_id)
-
-    # Check if sync is already running
-    running = db.query(SyncRun).filter(SyncRun.status == "running").count()
-    if running > 0:
+    if sync_in_progress(db):
         return {
             "status": "already_running",
             "message": "A sync is already in progress",
             "check_status_at": "/api/sync/status"
         }
 
-    # Start background sync
-    async def run_sync():
-        from ..database import SessionLocal
-        session = SessionLocal()
-        try:
-            await full_sync(session, profile, force_full=force_full)
-        finally:
-            session.close()
-
-    _sync_task = asyncio.create_task(run_sync())
+    start_background_sync([profile_id], force_full=force_full)
 
     return {
         "status": "started",
@@ -142,7 +160,9 @@ def get_status(
     _admin: AdminUser = Depends(get_current_admin)
 ):
     """Get current sync status, optionally scoped to one profile."""
-    return get_sync_status(db, profile_id=profile_id)
+    status = get_sync_status(db, profile_id=profile_id)
+    status["sync_running"] = sync_in_progress(db)
+    return status
 
 
 @router.get("/progress")
@@ -216,5 +236,6 @@ async def test_connection(
     result = await client.test_connection()
     return {
         "profile_id": profile_id,
+        "configured": True,
         **result
     }

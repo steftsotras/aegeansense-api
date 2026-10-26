@@ -30,7 +30,7 @@ settings = get_settings()
 
 # Known dynamic metrics (attributes with historical data)
 DYNAMIC_METRICS = {
-    "airTemperature", "airRelativeHumidity", 
+    "airTemperature", "airRelativeHumidity",
     "soilTemperature", "soilMoisture",
     "soilElectricalConductivity", "soilSalinity", "soilTDS",
     "leafWetness", "rain", "rainRate",
@@ -43,7 +43,7 @@ DYNAMIC_METRICS = {
 def parse_finot_timestamp(ts_string: str) -> Optional[datetime]:
     """
     Parse FINoT timestamp string to datetime.
-    
+
     Handles formats like:
     - "2025-01-01T00:00:00.000Z"
     - "2025-01-01T00:00:00.000"
@@ -51,12 +51,12 @@ def parse_finot_timestamp(ts_string: str) -> Optional[datetime]:
     """
     if not ts_string:
         return None
-    
+
     try:
         # Try with milliseconds and Z
         if ts_string.endswith("Z"):
             ts_string = ts_string[:-1] + "+00:00"
-        
+
         return datetime.fromisoformat(ts_string)
     except ValueError as e:
         logger.warning(f"Could not parse timestamp '{ts_string}': {e}")
@@ -66,7 +66,7 @@ def parse_finot_timestamp(ts_string: str) -> Optional[datetime]:
 def extract_station_data(station_obj: dict) -> dict:
     """
     Extract station metadata from FINoT station object.
-    
+
     Maps FINoT's nested structure to our flat schema.
     """
     # Basic fields
@@ -75,19 +75,19 @@ def extract_station_data(station_obj: dict) -> dict:
         "type": station_obj.get("type", "Unknown"),
         "attributes": station_obj,  # Store raw attributes for reference
     }
-    
+
     # Extract from nested attributes with metadata
     def get_attr_value(attr_name: str) -> Optional[str]:
         attr = station_obj.get(attr_name, {})
         if isinstance(attr, dict):
             return attr.get("value")
         return None
-    
+
     data["name"] = get_attr_value("name")
     data["serial_number"] = get_attr_value("serialNumber")
     data["product_id"] = get_attr_value("productId")
     data["connection_status"] = get_attr_value("connectionStatus") or "UNKNOWN"
-    
+
     # Extract location
     location = station_obj.get("location", {})
     if isinstance(location, dict):
@@ -97,14 +97,14 @@ def extract_station_data(station_obj: dict) -> dict:
             if len(coords) >= 2:
                 data["longitude"] = coords[0]
                 data["latitude"] = coords[1]
-    
+
     # Last update timestamp
     time_instant = station_obj.get("TimeInstant", {})
     if isinstance(time_instant, dict):
         ts = time_instant.get("value")
         if ts:
             data["last_seen"] = parse_finot_timestamp(ts)
-    
+
     return data
 
 
@@ -154,7 +154,7 @@ async def sync_stations(db: Session, profile: FinotProfile) -> int:
                 }
             )
             db.execute(stmt)
-            
+
             # Initialize sync progress for this station
             progress_stmt = pg_insert(SyncProgress).values(
                 entity_id=station_data["id"],
@@ -164,19 +164,19 @@ async def sync_stations(db: Session, profile: FinotProfile) -> int:
             )
             progress_stmt = progress_stmt.on_conflict_do_nothing(index_elements=["entity_id"])
             db.execute(progress_stmt)
-            
+
             count += 1
-        
+
         db.commit()
-        
+
         sync_log.status = "completed"
         sync_log.records_count = count
         sync_log.completed_at = datetime.now(timezone.utc)
         db.commit()
-        
+
         logger.info(f"Synced {count} stations")
         return count
-        
+
     except Exception as e:
         logger.error(f"Stations sync failed: {e}")
         sync_log.status = "failed"
@@ -226,17 +226,19 @@ async def sync_readings_batch(
         # Get stations belonging to this profile
         stations = db.query(Station).filter(Station.profile_id == profile.id).all()
         logger.info(f"Syncing readings for {len(stations)} stations")
-        
+
         total_readings = 0
         entities_synced = 0
-        
+        failed_entities = 0
+
         for station in stations:
+            progress = None
             try:
                 # Get or create sync progress
                 progress = db.query(SyncProgress).filter(
                     SyncProgress.entity_id == station.id
                 ).first()
-                
+
                 if not progress:
                     progress = SyncProgress(
                         entity_id=station.id,
@@ -246,44 +248,40 @@ async def sync_readings_batch(
                     )
                     db.add(progress)
                     db.commit()
-                
-                # Skip if already complete (unless force_full)
-                if progress.is_complete and not force_full:
-                    logger.info(f"Skipping {station.id} - already complete")
-                    continue
-                
-                # Determine start point
+
+                # Determine start point. Resuming re-fetches a short overlap because
+                # FINoT can ingest readings after their timestamp; inserts are idempotent.
                 if force_full or not progress.last_synced_to:
                     current_start = start_date
                 else:
-                    current_start = progress.last_synced_to
-                
+                    current_start = progress.last_synced_to - timedelta(hours=settings.sync_overlap_hours)
+
                 now = datetime.now(timezone.utc)
                 station_readings = 0
                 earliest = None
                 latest = None
-                
+
                 # Batch through date ranges
                 while current_start < now:
                     current_end = min(current_start + timedelta(days=batch_days), now)
-                    
+
                     logger.info(f"Fetching {station.id}: {current_start.date()} to {current_end.date()}")
-                    
+
                     try:
                         result = await client.fetch_historical_data(
                             entity_id=station.id,
                             from_date=current_start,
                             to_date=current_end
                         )
-                        
+
                         # Process data
                         index = result.get("index", [])
                         attributes = result.get("attributes", [])
-                        
+
                         if index:
                             batch_count = process_readings_batch(db, station.id, index, attributes)
                             station_readings += batch_count
-                            
+
                             # Track earliest/latest
                             for ts_str in index:
                                 ts = parse_finot_timestamp(ts_str)
@@ -292,18 +290,19 @@ async def sync_readings_batch(
                                         earliest = ts
                                     if latest is None or ts > latest:
                                         latest = ts
-                        
+
                     except Exception as e:
                         logger.warning(f"Batch fetch failed for {station.id} ({current_start} to {current_end}): {e}")
-                        # Continue to next batch instead of failing completely
-                    
+                        # Keep the last successful cursor so this batch is retried.
+                        raise
+
                     # Update progress after each batch
                     progress.last_synced_to = current_end
                     progress.updated_at = datetime.now(timezone.utc)
                     db.commit()
-                    
+
                     current_start = current_end
-                
+
                 # Update final progress
                 progress.total_records = (progress.total_records or 0) + station_readings
                 if earliest:
@@ -313,32 +312,36 @@ async def sync_readings_batch(
                 progress.is_complete = True
                 progress.error_message = None
                 db.commit()
-                
+
                 total_readings += station_readings
                 entities_synced += 1
                 logger.info(f"Synced {station_readings} readings for {station.name or station.id}")
-                
+
             except Exception as e:
                 logger.error(f"Failed to sync readings for station {station.id}: {e}")
+                db.rollback()
+                failed_entities += 1
                 # Update progress with error
                 if progress:
                     progress.error_message = str(e)
                     progress.is_complete = False
                     db.commit()
                 continue
-        
+
         # Update sync run
-        sync_run.status = "completed"
+        sync_run.status = "failed" if failed_entities else "completed"
+        sync_run.error_message = f"Failed to sync {failed_entities} station(s); retry to resume" if failed_entities else None
         sync_run.completed_at = datetime.now(timezone.utc)
         sync_run.entities_synced = entities_synced
         sync_run.records_synced = total_readings
         db.commit()
-        
+
         logger.info(f"Batch sync complete: {total_readings} readings from {entities_synced} entities")
         return total_readings
-        
+
     except Exception as e:
         logger.error(f"Batch readings sync failed: {e}")
+        db.rollback()
         sync_run.status = "failed"
         sync_run.error_message = str(e)
         sync_run.completed_at = datetime.now(timezone.utc)
@@ -349,64 +352,88 @@ async def sync_readings_batch(
 def process_readings_batch(db: Session, station_id: str, index: list, attributes: list) -> int:
     """
     Process a batch of readings and insert into database.
-    
+
     Args:
         db: Database session
         station_id: Station ID
         index: List of timestamp strings
         attributes: List of attribute dicts with attrName and values
-    
+
     Returns:
-        Number of readings inserted
+        Number of new readings inserted (duplicates are skipped)
     """
     readings_batch = []
-    
+
     for attr in attributes:
         attr_name = attr.get("attrName")
         values = attr.get("values", [])
-        
+
         # Skip if not a dynamic metric we care about
         if attr_name not in DYNAMIC_METRICS:
             continue
-        
+
         # Create readings for each timestamp-value pair
         for i, timestamp_str in enumerate(index):
             if i >= len(values):
                 break
-            
+
             value = values[i]
-            
+
             # Skip null values
             if value is None:
                 continue
-            
+
             timestamp = parse_finot_timestamp(timestamp_str)
             if not timestamp:
                 continue
-            
+
             readings_batch.append({
                 "station_id": station_id,
                 "metric": attr_name,
                 "value": float(value),
                 "recorded_at": timestamp
             })
-    
+
     # Bulk insert with conflict handling
+    inserted = 0
     if readings_batch:
         # Insert in chunks to avoid memory issues
         chunk_size = 1000
         for i in range(0, len(readings_batch), chunk_size):
             chunk = readings_batch[i:i + chunk_size]
-            
+
             stmt = pg_insert(Reading).values(chunk)
             stmt = stmt.on_conflict_do_nothing(
                 index_elements=["station_id", "recorded_at", "metric"]
             )
-            db.execute(stmt)
-        
+            inserted += db.execute(stmt).rowcount
+
         db.commit()
-    
-    return len(readings_batch)
+
+    return inserted
+
+
+def recover_interrupted_syncs(db: Session) -> int:
+    """
+    Mark runs left as 'running' by a previous process as failed.
+
+    Background syncs run in-process, so a redeploy or restart kills them without
+    updating their rows; a stale 'running' row would otherwise block every
+    future sync with "already_running". Call once at startup.
+    """
+    now = datetime.now(timezone.utc)
+    message = "Interrupted by API restart; retry to resume"
+    count = 0
+    for model in (SyncRun, SyncLog):
+        for row in db.query(model).filter(model.status == "running").all():
+            row.status = "failed"
+            row.error_message = message
+            row.completed_at = now
+            count += 1
+    db.commit()
+    if count:
+        logger.warning(f"Marked {count} interrupted sync record(s) as failed")
+    return count
 
 
 async def full_sync(db: Session, profile: FinotProfile, force_full: bool = False) -> dict:
@@ -423,7 +450,7 @@ async def full_sync(db: Session, profile: FinotProfile, force_full: bool = False
     """
     stations_count = await sync_stations(db, profile)
     readings_count = await sync_readings_batch(db, profile, force_full=force_full)
-    
+
     return {
         "stations_synced": stations_count,
         "readings_synced": readings_count,
@@ -458,7 +485,7 @@ def get_sync_status(db: Session, profile_id: Optional[int] = None) -> dict:
 
     # Get latest sync run
     latest_run = db.query(SyncRun).order_by(SyncRun.started_at.desc()).first()
-    
+
     return {
         "stations_in_db": station_count,
         "readings_in_db": reading_count,
@@ -482,7 +509,7 @@ def get_sync_progress(db: Session, profile_id: Optional[int] = None) -> list:
     if profile_id is not None:
         query = query.filter(Station.profile_id == profile_id)
     progress_list = query.order_by(SyncProgress.entity_id).all()
-    
+
     return [
         {
             "entity_id": p.entity_id,

@@ -55,7 +55,7 @@ class Station(Base):
 
 class Metric(Base):
     __tablename__ = "metrics"
-    
+
     name = Column(String, primary_key=True)
     label = Column(String, nullable=False)
     unit_code = Column(String)
@@ -65,15 +65,15 @@ class Metric(Base):
 
 class Reading(Base):
     __tablename__ = "readings"
-    
+
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     station_id = Column(String, ForeignKey("stations.id", ondelete="CASCADE"), nullable=False)
     recorded_at = Column(DateTime(timezone=True), nullable=False)
     metric = Column(String, nullable=False)
     value = Column(Float, nullable=False)
-    
+
     station = relationship("Station", back_populates="readings")
-    
+
     __table_args__ = (
         Index('idx_readings_unique', 'station_id', 'recorded_at', 'metric', unique=True),
     )
@@ -82,7 +82,7 @@ class Reading(Base):
 class SyncProgress(Base):
     """Tracks per-entity sync state for batch syncing to avoid 10k limit."""
     __tablename__ = "sync_progress"
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True)
     entity_id = Column(String, ForeignKey("stations.id", ondelete="CASCADE"), nullable=False, unique=True)
     entity_type = Column(String)
@@ -93,14 +93,14 @@ class SyncProgress(Base):
     total_records = Column(Integer, default=0)  # Count of records synced
     error_message = Column(Text)  # Last error if any
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-    
+
     station = relationship("Station", back_populates="sync_progress")
 
 
 class SyncRun(Base):
     """Tracks each sync job execution."""
     __tablename__ = "sync_runs"
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True)
     status = Column(String, default="running")  # running, completed, failed
     started_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -113,7 +113,7 @@ class SyncRun(Base):
 class SyncLog(Base):
     """Per-step sync log (e.g. station-metadata syncs), exposed via /api/sync/logs."""
     __tablename__ = "sync_log"
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True)
     sync_type = Column(String, nullable=False)
     started_at = Column(DateTime(timezone=True), server_default=func.now())

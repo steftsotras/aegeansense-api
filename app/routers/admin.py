@@ -3,6 +3,7 @@ Admin login and FINoT profile management endpoints.
 """
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from ..database import get_db
 from ..dependencies import get_current_admin
@@ -15,6 +16,14 @@ from ..services.auth import verify_password, create_access_token
 from ..services.crypto import encrypt_password
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+
+def _commit_profile(db: Session):
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="A profile with this name already exists")
 
 
 @router.post("/login", response_model=AdminLoginResponse)
@@ -55,7 +64,7 @@ def create_profile(
         is_active=payload.is_active
     )
     db.add(profile)
-    db.commit()
+    _commit_profile(db)
     db.refresh(profile)
     return profile
 
@@ -86,13 +95,19 @@ def update_profile(
         raise HTTPException(status_code=404, detail="Profile not found")
 
     updates = payload.model_dump(exclude_unset=True)
+    if any(value is None for value in updates.values()):
+        raise HTTPException(status_code=422, detail="Profile fields cannot be null")
+    if "name" in updates and db.query(FinotProfile).filter(
+        FinotProfile.name == updates["name"], FinotProfile.id != profile_id
+    ).first():
+        raise HTTPException(status_code=409, detail="A profile with this name already exists")
     if "finot_password" in updates:
         password = updates.pop("finot_password")
         profile.finot_password_encrypted = encrypt_password(password)
     for field, value in updates.items():
         setattr(profile, field, value)
 
-    db.commit()
+    _commit_profile(db)
     db.refresh(profile)
     return profile
 

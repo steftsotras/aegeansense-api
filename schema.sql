@@ -87,11 +87,11 @@ CREATE TABLE IF NOT EXISTS readings (
     value           DOUBLE PRECISION NOT NULL
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_readings_unique 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_readings_unique
     ON readings(station_id, recorded_at, metric);
-CREATE INDEX IF NOT EXISTS idx_readings_station_time 
+CREATE INDEX IF NOT EXISTS idx_readings_station_time
     ON readings(station_id, recorded_at DESC);
-CREATE INDEX IF NOT EXISTS idx_readings_station_metric 
+CREATE INDEX IF NOT EXISTS idx_readings_station_metric
     ON readings(station_id, metric, recorded_at DESC);
 
 -- SYNC PROGRESS TABLE (tracks per-entity sync state for batch syncing)
@@ -108,7 +108,7 @@ CREATE TABLE IF NOT EXISTS sync_progress (
     updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_sync_progress_incomplete 
+CREATE INDEX IF NOT EXISTS idx_sync_progress_incomplete
     ON sync_progress(is_complete) WHERE is_complete = FALSE;
 
 -- SYNC RUN TABLE (tracks each sync job execution)
@@ -142,7 +142,7 @@ ORDER BY station_id, metric, recorded_at DESC;
 
 -- HELPFUL VIEW: Sync status summary
 CREATE OR REPLACE VIEW sync_status_summary AS
-SELECT 
+SELECT
     (SELECT COUNT(*) FROM stations) as total_stations,
     (SELECT COUNT(*) FROM sync_progress WHERE is_complete = TRUE) as fully_synced,
     (SELECT COUNT(*) FROM sync_progress WHERE is_complete = FALSE) as pending_sync,

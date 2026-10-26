@@ -22,25 +22,25 @@ def get_stations(
 ):
     """Get all stations with their latest metrics."""
     query = db.query(Station)
-    
+
     if type:
         query = query.filter(Station.type == type)
     if status:
         query = query.filter(Station.connection_status == status)
-    
+
     stations = query.order_by(Station.name).all()
-    
+
     result = []
     for station in stations:
         # Get latest reading for each metric
         latest = db.execute(text("""
-            SELECT DISTINCT ON (metric) 
+            SELECT DISTINCT ON (metric)
                 metric, value, recorded_at
-            FROM readings 
+            FROM readings
             WHERE station_id = :sid
             ORDER BY metric, recorded_at DESC
         """), {"sid": station.id}).fetchall()
-        
+
         # Get metric labels
         metrics_dict = {}
         for row in latest:
@@ -51,7 +51,7 @@ def get_stations(
                 label=metric_info.label if metric_info else row.metric,
                 unit=metric_info.unit_symbol if metric_info else None
             )
-        
+
         result.append(StationWithMetrics(
             id=station.id,
             type=station.type,
@@ -65,7 +65,7 @@ def get_stations(
             synced_at=station.synced_at,
             metrics=metrics_dict
         ))
-    
+
     return result
 
 
@@ -75,14 +75,14 @@ def get_station(station_id: str, db: Session = Depends(get_db)):
     station = db.query(Station).filter(Station.id == station_id).first()
     if not station:
         raise HTTPException(status_code=404, detail="Station not found")
-    
+
     # Get latest readings
     latest = db.execute(text("""
         SELECT DISTINCT ON (metric) metric, value, recorded_at
         FROM readings WHERE station_id = :sid
         ORDER BY metric, recorded_at DESC
     """), {"sid": station_id}).fetchall()
-    
+
     metrics_dict = {}
     for row in latest:
         metric_info = db.query(Metric).filter(Metric.name == row.metric).first()
@@ -92,7 +92,7 @@ def get_station(station_id: str, db: Session = Depends(get_db)):
             label=metric_info.label if metric_info else row.metric,
             unit=metric_info.unit_symbol if metric_info else None
         )
-    
+
     return StationWithMetrics(
         id=station.id,
         type=station.type,
@@ -122,19 +122,21 @@ def get_readings(
     station = db.query(Station).filter(Station.id == station_id).first()
     if not station:
         raise HTTPException(status_code=404, detail="Station not found")
-    
+
     # Default date range
     if not to_date:
         to_date = datetime.now(timezone.utc)
     if not from_date:
         from_date = to_date - timedelta(days=30)
-    
+
     # Build query
     metric_filter = ""
+    params = {"sid": station_id, "from_date": from_date, "to_date": to_date}
     if metrics:
         metric_list = [m.strip() for m in metrics.split(",")]
-        metric_filter = f"AND metric IN ({','.join(repr(m) for m in metric_list)})"
-    
+        metric_filter = "AND metric = ANY(:metrics)"
+        params["metrics"] = metric_list
+
     if agg and agg in ('hour', 'day', 'month'):
         sql = f"""
             SELECT date_trunc('{agg}', recorded_at) as ts, metric, AVG(value) as value
@@ -152,9 +154,9 @@ def get_readings(
             {metric_filter}
             ORDER BY metric, recorded_at
         """
-    
-    rows = db.execute(text(sql), {"sid": station_id, "from_date": from_date, "to_date": to_date}).fetchall()
-    
+
+    rows = db.execute(text(sql), params).fetchall()
+
     # Group by metric
     series_dict = {}
     for row in rows:
@@ -167,7 +169,7 @@ def get_readings(
                 "data": []
             }
         series_dict[row.metric]["data"].append(DataPoint(recorded_at=row.ts, value=row.value))
-    
+
     return HistoricalData(
         station_id=station_id,
         from_date=from_date,
@@ -182,13 +184,13 @@ def get_latest(station_id: str, db: Session = Depends(get_db)):
     station = db.query(Station).filter(Station.id == station_id).first()
     if not station:
         raise HTTPException(status_code=404, detail="Station not found")
-    
+
     latest = db.execute(text("""
         SELECT DISTINCT ON (metric) metric, value, recorded_at
         FROM readings WHERE station_id = :sid
         ORDER BY metric, recorded_at DESC
     """), {"sid": station_id}).fetchall()
-    
+
     result = {}
     for row in latest:
         metric_info = db.query(Metric).filter(Metric.name == row.metric).first()
@@ -198,5 +200,5 @@ def get_latest(station_id: str, db: Session = Depends(get_db)):
             "label": metric_info.label if metric_info else row.metric,
             "unit": metric_info.unit_symbol if metric_info else None
         }
-    
+
     return result

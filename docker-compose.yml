@@ -42,8 +42,9 @@ services:
       # Batch sync settings (per FinotProfile, applied when a sync is triggered)
       SYNC_BATCH_DAYS: ${SYNC_BATCH_DAYS:-7}
       SYNC_START_DATE: ${SYNC_START_DATE:-2024-01-01}
+      SYNC_INTERVAL_HOURS: ${SYNC_INTERVAL_HOURS:-6}
 
-      # Admin bootstrap - seeds the first admin_users row on first startup
+      # Admin bootstrap - seeds the first admin_users row; a changed password is applied at startup
       ADMIN_EMAIL: ${ADMIN_EMAIL}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
 
@@ -53,6 +54,7 @@ services:
 
       # Encrypts FinotProfile passwords at rest
       CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
     ports:
       - "8000:8000"
     # For development: mount code for hot reload
